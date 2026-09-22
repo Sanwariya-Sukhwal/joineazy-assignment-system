@@ -1,25 +1,81 @@
 const { pool } = require('../config/db');
 
-// Create a new assignment (Admin/Professor only)
+// ==========================================
+// Create Assignment
+// ==========================================
 const createAssignment = async (req, res) => {
   try {
-    const { title, description, dueDate, oneDriveLink } = req.body;
+    const {
+      title,
+      description,
+      dueDate,
+      oneDriveLink,
+      courseId,
+      submissionType,
+    } = req.body;
+
     const professorId = req.user.userId;
 
-    // Validation
-    if (!title || !dueDate) {
-      return res.status(400).json({ error: 'Title and due date are required' });
+    if (!title || !dueDate || !courseId || !submissionType) {
+      return res.status(400).json({
+        error: 'Title, due date, course, and submission type are required',
+      });
     }
 
-    // Verify due date is in the future
+    if (!['individual', 'group'].includes(submissionType)) {
+      return res.status(400).json({
+        error: 'Submission type must be individual or group',
+      });
+    }
+
     if (new Date(dueDate) <= new Date()) {
-      return res.status(400).json({ error: 'Due date must be in the future' });
+      return res.status(400).json({
+        error: 'Due date must be in the future',
+      });
     }
 
-    // Create assignment
+    // Verify course belongs to the logged-in professor
+    const courseResult = await pool.query(
+      `
+      SELECT id, name
+      FROM courses
+      WHERE id = $1
+        AND professor_id = $2
+      `,
+      [courseId, professorId]
+    );
+
+    if (courseResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Course not found',
+      });
+    }
+
     const newAssignment = await pool.query(
-      'INSERT INTO assignments (title, description, due_date, onedrive_link, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [title, description || null, dueDate, oneDriveLink || null, professorId]
+      `
+      INSERT INTO assignments
+        (
+          title,
+          description,
+          due_date,
+          onedrive_link,
+          created_by,
+          course_id,
+          submission_type
+        )
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+      `,
+      [
+        title.trim(),
+        description?.trim() || null,
+        dueDate,
+        oneDriveLink?.trim() || null,
+        professorId,
+        courseId,
+        submissionType,
+      ]
     );
 
     const assignment = newAssignment.rows[0];
@@ -33,65 +89,116 @@ const createAssignment = async (req, res) => {
         dueDate: assignment.due_date,
         oneDriveLink: assignment.onedrive_link,
         createdBy: assignment.created_by,
+        courseId: assignment.course_id,
+        courseName: courseResult.rows[0].name,
+        submissionType: assignment.submission_type,
         createdAt: assignment.created_at,
       },
     });
   } catch (error) {
     console.error('Create assignment error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Get all assignments
+// ==========================================
+// Get All Assignments
+// ==========================================
 const getAllAssignments = async (req, res) => {
   try {
-    const assignmentsResult = await pool.query(`
-      SELECT a.id, a.title, a.description, a.due_date, a.onedrive_link, 
-             a.created_by, a.created_at,
-             u.first_name, u.last_name, u.email
+    const result = await pool.query(`
+      SELECT
+        a.id,
+        a.title,
+        a.description,
+        a.due_date,
+        a.onedrive_link,
+        a.created_by,
+        a.course_id,
+        a.submission_type,
+        a.created_at,
+        c.name AS course_name,
+        u.first_name,
+        u.last_name,
+        u.email
       FROM assignments a
-      JOIN users u ON a.created_by = u.id
+      JOIN users u
+        ON a.created_by = u.id
+      LEFT JOIN courses c
+        ON a.course_id = c.id
       ORDER BY a.due_date ASC
     `);
 
-    const assignments = assignmentsResult.rows.map(row => ({
+    const assignments = result.rows.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
       dueDate: row.due_date,
       oneDriveLink: row.onedrive_link,
       createdBy: row.created_by,
+      courseId: row.course_id,
+      courseName: row.course_name,
+      submissionType: row.submission_type,
       professorName: `${row.first_name} ${row.last_name}`,
       professorEmail: row.email,
       createdAt: row.created_at,
     }));
 
-    res.status(200).json({ assignments });
+    res.status(200).json({
+      assignments,
+    });
   } catch (error) {
     console.error('Get all assignments error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Get assignment by ID
+// ==========================================
+// Get Assignment By ID
+// ==========================================
 const getAssignmentById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const assignmentResult = await pool.query(`
-      SELECT a.id, a.title, a.description, a.due_date, a.onedrive_link, 
-             a.created_by, a.created_at,
-             u.first_name, u.last_name, u.email
+    const result = await pool.query(
+      `
+      SELECT
+        a.id,
+        a.title,
+        a.description,
+        a.due_date,
+        a.onedrive_link,
+        a.created_by,
+        a.course_id,
+        a.submission_type,
+        a.created_at,
+        c.name AS course_name,
+        u.first_name,
+        u.last_name,
+        u.email
       FROM assignments a
-      JOIN users u ON a.created_by = u.id
+      JOIN users u
+        ON a.created_by = u.id
+      LEFT JOIN courses c
+        ON a.course_id = c.id
       WHERE a.id = $1
-    `, [id]);
+      `,
+      [id]
+    );
 
-    if (assignmentResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Assignment not found' });
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Assignment not found',
+      });
     }
 
-    const assignment = assignmentResult.rows[0];
+    const assignment = result.rows[0];
 
     res.status(200).json({
       assignment: {
@@ -101,6 +208,9 @@ const getAssignmentById = async (req, res) => {
         dueDate: assignment.due_date,
         oneDriveLink: assignment.onedrive_link,
         createdBy: assignment.created_by,
+        courseId: assignment.course_id,
+        courseName: assignment.course_name,
+        submissionType: assignment.submission_type,
         professorName: `${assignment.first_name} ${assignment.last_name}`,
         professorEmail: assignment.email,
         createdAt: assignment.created_at,
@@ -108,74 +218,160 @@ const getAssignmentById = async (req, res) => {
     });
   } catch (error) {
     console.error('Get assignment by ID error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Update assignment (Admin/Professor only)
+// ==========================================
+// Update Assignment
+// ==========================================
 const updateAssignment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, dueDate, oneDriveLink } = req.body;
+
+    const {
+      title,
+      description,
+      dueDate,
+      oneDriveLink,
+      courseId,
+      submissionType,
+    } = req.body;
+
     const professorId = req.user.userId;
 
-    // Check if assignment exists and user is creator
     const assignmentResult = await pool.query(
-      'SELECT * FROM assignments WHERE id = $1',
+      `
+      SELECT *
+      FROM assignments
+      WHERE id = $1
+      `,
       [id]
     );
 
     if (assignmentResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Assignment not found' });
+      return res.status(404).json({
+        error: 'Assignment not found',
+      });
     }
 
     const assignment = assignmentResult.rows[0];
+
     if (assignment.created_by !== professorId) {
-      return res.status(403).json({ error: 'Only the creator can update this assignment' });
+      return res.status(403).json({
+        error: 'Only the creator can update this assignment',
+      });
     }
 
-    // Update assignment
+    if (
+      submissionType !== undefined &&
+      !['individual', 'group'].includes(submissionType)
+    ) {
+      return res.status(400).json({
+        error: 'Submission type must be individual or group',
+      });
+    }
+
+    if (
+      dueDate !== undefined &&
+      new Date(dueDate) <= new Date()
+    ) {
+      return res.status(400).json({
+        error: 'Due date must be in the future',
+      });
+    }
+
+    // Verify course when courseId is provided
+    if (courseId !== undefined) {
+      const courseResult = await pool.query(
+        `
+        SELECT id
+        FROM courses
+        WHERE id = $1
+          AND professor_id = $2
+        `,
+        [courseId, professorId]
+      );
+
+      if (courseResult.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Course not found',
+        });
+      }
+    }
+
     const updateFields = [];
     const values = [];
     let paramCount = 1;
 
     if (title !== undefined) {
+      if (!title.trim()) {
+        return res.status(400).json({
+          error: 'Title cannot be empty',
+        });
+      }
+
       updateFields.push(`title = $${paramCount}`);
-      values.push(title);
+      values.push(title.trim());
       paramCount++;
     }
+
     if (description !== undefined) {
       updateFields.push(`description = $${paramCount}`);
-      values.push(description);
+      values.push(description?.trim() || null);
       paramCount++;
     }
+
     if (dueDate !== undefined) {
       updateFields.push(`due_date = $${paramCount}`);
       values.push(dueDate);
       paramCount++;
     }
+
     if (oneDriveLink !== undefined) {
       updateFields.push(`onedrive_link = $${paramCount}`);
-      values.push(oneDriveLink);
+      values.push(oneDriveLink?.trim() || null);
+      paramCount++;
+    }
+
+    if (courseId !== undefined) {
+      updateFields.push(`course_id = $${paramCount}`);
+      values.push(courseId);
+      paramCount++;
+    }
+
+    if (submissionType !== undefined) {
+      updateFields.push(`submission_type = $${paramCount}`);
+      values.push(submissionType);
       paramCount++;
     }
 
     if (updateFields.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' });
+      return res.status(400).json({
+        error: 'No fields to update',
+      });
     }
 
-    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+    updateFields.push('updated_at = CURRENT_TIMESTAMP');
+
     values.push(id);
 
     const updateQuery = `
-      UPDATE assignments 
+      UPDATE assignments
       SET ${updateFields.join(', ')}
       WHERE id = $${paramCount}
       RETURNING *
     `;
 
-    const updatedAssignmentResult = await pool.query(updateQuery, values);
-    const updatedAssignment = updatedAssignmentResult.rows[0];
+    const updatedResult = await pool.query(
+      updateQuery,
+      values
+    );
+
+    const updatedAssignment = updatedResult.rows[0];
 
     res.status(200).json({
       message: 'Assignment updated successfully',
@@ -185,61 +381,92 @@ const updateAssignment = async (req, res) => {
         description: updatedAssignment.description,
         dueDate: updatedAssignment.due_date,
         oneDriveLink: updatedAssignment.onedrive_link,
+        courseId: updatedAssignment.course_id,
+        submissionType: updatedAssignment.submission_type,
         updatedAt: updatedAssignment.updated_at,
       },
     });
   } catch (error) {
     console.error('Update assignment error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Delete assignment (Admin/Professor only)
+// ==========================================
+// Delete Assignment
+// ==========================================
 const deleteAssignment = async (req, res) => {
   try {
     const { id } = req.params;
     const professorId = req.user.userId;
 
-    // Check if assignment exists and user is creator
     const assignmentResult = await pool.query(
-      'SELECT * FROM assignments WHERE id = $1',
+      `
+      SELECT *
+      FROM assignments
+      WHERE id = $1
+      `,
       [id]
     );
 
     if (assignmentResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Assignment not found' });
+      return res.status(404).json({
+        error: 'Assignment not found',
+      });
     }
 
     const assignment = assignmentResult.rows[0];
+
     if (assignment.created_by !== professorId) {
-      return res.status(403).json({ error: 'Only the creator can delete this assignment' });
+      return res.status(403).json({
+        error: 'Only the creator can delete this assignment',
+      });
     }
 
-    // Delete assignment (cascading delete will handle submissions)
-    await pool.query('DELETE FROM assignments WHERE id = $1', [id]);
+    await pool.query(
+      'DELETE FROM assignments WHERE id = $1',
+      [id]
+    );
 
-    res.status(200).json({ message: 'Assignment deleted successfully' });
+    res.status(200).json({
+      message: 'Assignment deleted successfully',
+    });
   } catch (error) {
     console.error('Delete assignment error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Get assignments for a group
+// ==========================================
+// Get Assignments For Group
+// ==========================================
 const getGroupAssignments = async (req, res) => {
   try {
     const { groupId } = req.params;
 
     const groupResult = await pool.query(
-      'SELECT id FROM groups WHERE id = $1',
+      `
+      SELECT id
+      FROM groups
+      WHERE id = $1
+      `,
       [groupId]
     );
 
     if (groupResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({
+        error: 'Group not found',
+      });
     }
 
-    const assignmentsResult = await pool.query(`
+    const result = await pool.query(
+      `
       SELECT
         a.id,
         a.title,
@@ -247,7 +474,10 @@ const getGroupAssignments = async (req, res) => {
         a.due_date,
         a.onedrive_link,
         a.created_by,
+        a.course_id,
+        a.submission_type,
         a.created_at,
+        c.name AS course_name,
         u.first_name,
         u.last_name,
         s.id AS submission_id,
@@ -255,21 +485,30 @@ const getGroupAssignments = async (req, res) => {
         s.submitted_at,
         s.submitted_by
       FROM assignments a
-      JOIN assignment_groups ag ON a.id = ag.assignment_id
-      JOIN users u ON a.created_by = u.id
+      JOIN assignment_groups ag
+        ON a.id = ag.assignment_id
+      JOIN users u
+        ON a.created_by = u.id
+      LEFT JOIN courses c
+        ON a.course_id = c.id
       LEFT JOIN submissions s
         ON a.id = s.assignment_id
         AND s.group_id = $1
       WHERE ag.group_id = $1
       ORDER BY a.due_date ASC
-    `, [groupId]);
+      `,
+      [groupId]
+    );
 
-    const assignments = assignmentsResult.rows.map((row) => ({
+    const assignments = result.rows.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
       dueDate: row.due_date,
       oneDriveLink: row.onedrive_link,
+      courseId: row.course_id,
+      courseName: row.course_name,
+      submissionType: row.submission_type,
       professorName: `${row.first_name} ${row.last_name}`,
       createdAt: row.created_at,
       isSubmitted: row.is_submitted,
@@ -283,14 +522,21 @@ const getGroupAssignments = async (req, res) => {
         : null,
     }));
 
-    res.status(200).json({ assignments });
+    res.status(200).json({
+      assignments,
+    });
   } catch (error) {
     console.error('Get group assignments error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+
+    res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 };
 
-// Assign assignment to a group (Admin only)
+// ==========================================
+// Assign Assignment To Group
+// ==========================================
 const assignToGroup = async (req, res) => {
   try {
     const { id } = req.params;
@@ -298,52 +544,80 @@ const assignToGroup = async (req, res) => {
 
     if (!groupId) {
       return res.status(400).json({
-        error: 'Group ID is required'
+        error: 'Group ID is required',
       });
     }
 
-    // Check assignment exists
     const assignmentResult = await pool.query(
-      'SELECT id FROM assignments WHERE id = $1',
+      `
+      SELECT
+        id,
+        submission_type,
+        created_by
+      FROM assignments
+      WHERE id = $1
+      `,
       [id]
     );
 
     if (assignmentResult.rows.length === 0) {
       return res.status(404).json({
-        error: 'Assignment not found'
+        error: 'Assignment not found',
       });
     }
 
-    // Check group exists
+    const assignment = assignmentResult.rows[0];
+
+    if (assignment.submission_type !== 'group') {
+      return res.status(400).json({
+        error: 'Only group assignments can be assigned to groups',
+      });
+    }
+
+    if (assignment.created_by !== req.user.userId) {
+      return res.status(403).json({
+        error: 'Only the assignment creator can assign this assignment',
+      });
+    }
+
     const groupResult = await pool.query(
-      'SELECT id, name FROM groups WHERE id = $1',
+      `
+      SELECT id, name
+      FROM groups
+      WHERE id = $1
+      `,
       [groupId]
     );
 
     if (groupResult.rows.length === 0) {
       return res.status(404).json({
-        error: 'Group not found'
+        error: 'Group not found',
       });
     }
 
-    // Check if already assigned
     const existingAssignment = await pool.query(
-      `SELECT id 
-       FROM assignment_groups 
-       WHERE assignment_id = $1 AND group_id = $2`,
+      `
+      SELECT id
+      FROM assignment_groups
+      WHERE assignment_id = $1
+        AND group_id = $2
+      `,
       [id, groupId]
     );
 
     if (existingAssignment.rows.length > 0) {
       return res.status(409).json({
-        error: 'Assignment is already assigned to this group'
+        error: 'Assignment is already assigned to this group',
       });
     }
 
-    // Assign assignment to group
     await pool.query(
-      `INSERT INTO assignment_groups (assignment_id, group_id)
-       VALUES ($1, $2)`,
+      `
+      INSERT INTO assignment_groups
+        (assignment_id, group_id)
+      VALUES
+        ($1, $2)
+      `,
       [id, groupId]
     );
 
@@ -351,50 +625,53 @@ const assignToGroup = async (req, res) => {
       message: 'Assignment assigned to group successfully',
       assignmentId: Number(id),
       groupId: Number(groupId),
-      groupName: groupResult.rows[0].name
+      groupName: groupResult.rows[0].name,
     });
-
   } catch (error) {
     console.error('Assign assignment to group error:', error);
 
     res.status(500).json({
-      error: 'Internal server error'
+      error: 'Internal server error',
     });
   }
 };
 
-
-// Get groups assigned to an assignment
+// ==========================================
+// Get Groups Assigned To Assignment
+// ==========================================
 const getAssignmentGroups = async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT 
+      `
+      SELECT
         g.id,
         g.name,
         g.leader_id,
         g.created_at
-       FROM assignment_groups ag
-       JOIN groups g ON ag.group_id = g.id
-       WHERE ag.assignment_id = $1
-       ORDER BY g.name`,
+      FROM assignment_groups ag
+      JOIN groups g
+        ON ag.group_id = g.id
+      WHERE ag.assignment_id = $1
+      ORDER BY g.name
+      `,
       [id]
     );
 
     res.status(200).json({
       assignmentId: Number(id),
-      groups: result.rows
+      groups: result.rows,
     });
-
   } catch (error) {
     console.error('Get assignment groups error:', error);
 
     res.status(500).json({
-      error: 'Internal server error'
+      error: 'Internal server error',
     });
   }
 };
+
 module.exports = {
   createAssignment,
   getAllAssignments,

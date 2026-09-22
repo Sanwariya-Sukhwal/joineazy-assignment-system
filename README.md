@@ -4,30 +4,61 @@ A full-stack web application for managing students, groups, assignments, assignm
 
 ## Project Overview
 
-Joineazy Assignment System is built for an educational workflow where students work in groups and professors/admins manage assignments and monitor progress.
+Joineazy Assignment System is a full-stack educational assignment management platform where students and professors can manage courses, groups, assignments, submissions, acknowledgements, and progress analytics.
+
+The application supports role-based workflows for:
+
+- Students
+- Professors/Admins
+
+Students can enroll in courses, create and manage groups, view assignments, submit assignments, and track their progress.
+
+Professors can create courses, enroll students, create assignments, choose individual or group submission types, assign group assignments, monitor submissions and acknowledgements, and view analytics.
 
 ### Student Features
 
 - Register and log in
+- View enrolled courses
+- View professor/course information
 - Create student groups
 - Add group members using student email
 - View group details and members
-- View assignments assigned to the student's groups
-- Open OneDrive assignment links
-- Confirm an assignment submission through a two-step confirmation flow
-- View submission status and group progress
+- View assignments assigned to enrolled courses/groups
+- Support individual and group assignments
+- Open assignment resource links
+- Confirm assignment submission
+- Acknowledge submitted assignments
+- Group leader acknowledgement for group assignments
+- View submission status
+- View acknowledgement status
+- View assignment and group progress
+- Responsive student dashboard
 
 ### Admin / Professor Features
 
-- Log in using an admin account
-- View dashboard statistics
+- Secure professor/admin login
+- Professor dashboard
+- Create courses
+- Edit courses
+- Delete courses
+- View enrolled student count per course
+- Enroll students into courses
+- Remove students from courses
 - Create assignments
 - Edit assignments
 - Delete assignments
-- Set assignment title, description, due date, and OneDrive link
-- Assign assignments to specific groups
-- Monitor group and student progress
-- View analytics for groups and students
+- Select course for an assignment
+- Select Individual or Group submission type
+- Set assignment title, description, deadline, and resource link
+- Assign group assignments to specific groups
+- View assignment details
+- Monitor student and group submissions
+- Monitor acknowledgement status
+- View submission progress
+- View group analytics
+- View student analytics
+- View assignment analytics
+- View course analytics
 
 ---
 
@@ -159,9 +190,11 @@ Authorization: Bearer <JWT_TOKEN>
 The application supports:
 
 - `student`
-- `admin`
+- `admin` — used internally for the Professor/Admin workspace
 
-Public registration creates a student account. Admin accounts are managed separately rather than allowing unrestricted public admin registration.
+Public registration creates student accounts.
+
+Professor/Admin accounts are managed separately and are not available through public registration.
 
 ---
 
@@ -171,29 +204,38 @@ PostgreSQL is used as the relational database.
 
 ### Tables
 
-1. `users` - Authentication and user profile information
-2. `groups` - Student groups
-3. `group_members` - Group membership relationship
-4. `assignments` - Assignment information
-5. `assignment_groups` - Assignment-to-group relationship
-6. `submissions` - Group assignment submission confirmations
+1. `users` - Authentication, profile, and role information
+2. `courses` - Professor-managed courses
+3. `course_students` - Student-course enrollment relationship
+4. `groups` - Student groups
+5. `group_members` - Group membership relationship
+6. `assignments` - Assignment information including course and submission type
+7. `assignment_groups` - Assignment-to-group relationship
+8. `submissions` - Individual/group submission and acknowledgement tracking
 
 ### Entity Relationship Diagram
 
 ```mermaid
 erDiagram
 
+    USERS ||--o{ COURSES : teaches
+    USERS ||--o{ COURSE_STUDENTS : enrolls
+    COURSES ||--o{ COURSE_STUDENTS : contains
+
     USERS ||--o{ GROUPS : leads
     USERS ||--o{ GROUP_MEMBERS : joins
     GROUPS ||--o{ GROUP_MEMBERS : contains
 
+    COURSES ||--o{ ASSIGNMENTS : contains
     USERS ||--o{ ASSIGNMENTS : creates
+
     ASSIGNMENTS ||--o{ ASSIGNMENT_GROUPS : assigned_to
     GROUPS ||--o{ ASSIGNMENT_GROUPS : receives
 
     ASSIGNMENTS ||--o{ SUBMISSIONS : has
-    GROUPS ||--o{ SUBMISSIONS : makes
-    USERS ||--o{ SUBMISSIONS : confirms
+    USERS ||--o{ SUBMISSIONS : submits
+    USERS ||--o{ SUBMISSIONS : acknowledges
+    GROUPS ||--o{ SUBMISSIONS : submits
 
     USERS {
         int id PK
@@ -204,6 +246,22 @@ erDiagram
         varchar role
         timestamp created_at
         timestamp updated_at
+    }
+
+    COURSES {
+        int id PK
+        varchar name
+        text description
+        int professor_id FK
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    COURSE_STUDENTS {
+        int id PK
+        int course_id FK
+        int student_id FK
+        timestamp enrolled_at
     }
 
     GROUPS {
@@ -227,7 +285,9 @@ erDiagram
         varchar title
         text description
         timestamp due_date
+        varchar submission_type
         varchar onedrive_link
+        int course_id FK
         int created_by FK
         timestamp created_at
         timestamp updated_at
@@ -244,9 +304,13 @@ erDiagram
         int id PK
         int assignment_id FK
         int group_id FK
+        int student_id FK
         boolean is_submitted
+        boolean acknowledged
         int submitted_by FK
+        int acknowledged_by FK
         timestamp submitted_at
+        timestamp acknowledged_at
         timestamp created_at
         timestamp updated_at
     }
@@ -299,6 +363,26 @@ Authorization: Bearer <JWT_TOKEN>
 | POST | `/groups/:id/members` | Add a member by email |
 | DELETE | `/groups/:id/members/:studentId` | Remove a member |
 
+### Course APIs
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/courses` | Get professor's courses |
+| POST | `/courses` | Create a course |
+| GET | `/courses/:id` | Get course details |
+| PUT | `/courses/:id` | Update a course |
+| DELETE | `/courses/:id` | Delete a course |
+| GET | `/student/courses` | Get enrolled courses for current student |
+
+### Student Enrollment APIs
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/students` | Get students |
+| GET | `/students/course/:courseId` | Get students enrolled in a course |
+| POST | `/students/course/:courseId` | Enroll a student |
+| DELETE | `/students/course/:courseId/:studentId` | Remove a student from a course |
+
 ### Assignment APIs
 
 | Method | Endpoint | Purpose |
@@ -312,12 +396,51 @@ Authorization: Bearer <JWT_TOKEN>
 | GET | `/assignments/:id/groups` | Get groups assigned to an assignment |
 | GET | `/assignments/group/:groupId` | Get assignments for a group |
 
+### Assignment Submission Types
+
+Assignments support two submission types:
+
+#### Individual
+
+Each student submits and acknowledges their own assignment.
+
+```text
+Student
+   ↓
+Submit Assignment
+   ↓
+Submission Confirmed
+   ↓
+Student Acknowledges
+```
+
+#### Group
+
+The assignment is assigned to a group.
+
+```text
+Group Member
+      ↓
+Submit Assignment
+      ↓
+Group Submission Confirmed
+      ↓
+Group Leader
+      ↓
+Acknowledges Assignment
+      ↓
+Status Reflected for Group
+```
+
+Only the group leader can acknowledge a group assignment.
+
 ### Submission APIs
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/submissions/:assignmentId/confirm` | Confirm assignment submission |
-| GET | `/submissions` | Get submissions |
+| POST | `/submissions/:assignmentId/acknowledge` | Acknowledge assignment |
+| GET | `/submissions` | Get all submissions |
 | GET | `/submissions/:assignmentId/:groupId` | Get submission status |
 | GET | `/submissions/group/:groupId` | Get group submissions |
 | GET | `/submissions/assignment/:assignmentId` | Get assignment submissions |
@@ -467,6 +590,30 @@ From the project root:
 docker compose up --build
 ```
 
+### First Time Run
+
+Build the images and start all services:
+
+```bash
+docker compose up --build
+```
+
+### Already Set Up
+
+If the project has already been built:
+
+```bash
+docker compose up
+```
+
+### After Dockerfile or Dependency Changes
+
+Rebuild the containers:
+
+```bash
+docker compose up --build
+```
+
 The services are exposed as:
 
 ```text
@@ -475,29 +622,25 @@ Backend:   http://localhost:5000
 PostgreSQL: localhost:5432
 ```
 
-### Check Running Containers
+### Check Containers
 
 ```bash
 docker compose ps
 ```
 
-### View Logs
-
-```bash
-docker compose logs -f
-```
-
-### View a Specific Service
+### Backend Logs
 
 ```bash
 docker compose logs -f backend
 ```
 
+### Frontend Logs
+
 ```bash
 docker compose logs -f frontend
 ```
 
-### Stop Containers
+### Stop Docker
 
 ```bash
 docker compose down
@@ -511,7 +654,7 @@ Only use this when you intentionally want to reset the local database:
 docker compose down -v
 ```
 
-> Warning: `docker compose down -v` deletes the PostgreSQL Docker volume and therefore removes the stored local database data.
+> **Important:** Do not use `docker compose down -v` unless you intentionally want to delete the local PostgreSQL database volume.
 
 ---
 
@@ -562,12 +705,14 @@ REACT_APP_BACKEND_URL=http://localhost:5000
 
 ## Database Initialization
 
-The backend initializes the required PostgreSQL tables when the application starts.
+The backend initializes and updates the required PostgreSQL tables when the application starts.
 
 The database contains:
 
 ```text
 users
+courses
+course_students
 groups
 group_members
 assignments
@@ -580,6 +725,8 @@ When using Docker Compose, PostgreSQL data is persisted in the named Docker volu
 ```text
 postgres_data
 ```
+
+This means normal container restarts do not remove the database data.
 
 ---
 
@@ -769,6 +916,60 @@ For a production deployment, the following should also be considered:
 - [ ] View student analytics
 - [ ] Verify submission statistics
 
+### Task 2 Student Flow
+
+- [ ] Register student
+- [ ] Login as student
+- [ ] View enrolled courses
+- [ ] Create group
+- [ ] Add group member
+- [ ] View group members
+- [ ] View course assignments
+- [ ] View individual assignment
+- [ ] View group assignment
+- [ ] Submit individual assignment
+- [ ] Submit group assignment
+- [ ] Acknowledge individual assignment
+- [ ] Group leader acknowledges group assignment
+- [ ] Verify acknowledgement status
+- [ ] Verify assignment progress
+- [ ] Verify group progress
+- [ ] Verify responsive/mobile UI
+
+### Task 2 Professor Flow
+
+- [ ] Login as professor/admin
+- [ ] View professor dashboard
+- [ ] Create course
+- [ ] Edit course
+- [ ] Delete course
+- [ ] Enroll student into course
+- [ ] Remove student from course
+- [ ] View course student count
+- [ ] Create individual assignment
+- [ ] Create group assignment
+- [ ] Edit assignment
+- [ ] Delete assignment
+- [ ] Assign assignment to group
+- [ ] View assignment details
+- [ ] Monitor submissions
+- [ ] Monitor acknowledgements
+- [ ] Filter/view submission status
+- [ ] View course analytics
+- [ ] View group analytics
+- [ ] View student analytics
+- [ ] View assignment analytics
+
+### Task 2 Docker Flow
+
+- [ ] First run with `docker compose up --build`
+- [ ] Subsequent run with `docker compose up`
+- [ ] PostgreSQL becomes healthy
+- [ ] Backend starts successfully
+- [ ] Frontend starts successfully
+- [ ] Frontend communicates with backend
+- [ ] Database data persists after restart
+
 ### Docker Flow
 
 - [ ] `docker compose up --build`
@@ -898,18 +1099,41 @@ Live Platform:    <add-live-platform-url-if-available>
 
 ## Project Status
 
-The core assignment management workflow is implemented and tested locally with Docker:
+### Task 1
+
+Completed:
 
 - Student registration/login
-- Admin login
+- Admin/Professor login
 - Group management
 - Assignment management
 - Group assignment distribution
 - Submission confirmation
 - Group progress tracking
-- Admin analytics
+- Analytics
 - PostgreSQL persistence
 - Dockerized frontend, backend, and database
+
+### Task 2
+
+Implemented:
+
+- Course management
+- Student-course enrollment
+- Professor dashboard
+- Individual assignment support
+- Group assignment support
+- Submission acknowledgement
+- Group leader acknowledgement
+- Submission progress tracking
+- Course-based assignments
+- Student course dashboard
+- Professor course analytics
+- Student progress analytics
+- Group progress analytics
+- Responsive UI improvements
+- Role-based access control
+- Docker-based full-stack development environment
 
 ---
 

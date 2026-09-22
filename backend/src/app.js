@@ -27,12 +27,19 @@ const groupRoutes = require('./routes/groupRoutes');
 const assignmentRoutes = require('./routes/assignmentRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const courseRoutes = require('./routes/courseRoutes');
+const studentRoutes = require('./routes/studentRoutes');
+const studentCourseRoutes = require('./routes/studentCourseRoutes');
 
+// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/courses', courseRoutes);
+app.use('/api/students', studentRoutes);
+app.use('/api/student/courses', studentCourseRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

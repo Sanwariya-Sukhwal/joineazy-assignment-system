@@ -3,33 +3,83 @@ const { pool } = require('../config/db');
 // Get overall analytics overview
 const getOverviewAnalytics = async (req, res) => {
   try {
-    // Total counts
-    const countsResult = await pool.query(`
-      SELECT 
-        (SELECT COUNT(*) FROM users WHERE role = 'student') as total_students,
-        (SELECT COUNT(*) FROM users WHERE role = 'admin') as total_admins,
-        (SELECT COUNT(*) FROM groups) as total_groups,
-        (SELECT COUNT(*) FROM assignments) as total_assignments,
-        (SELECT COUNT(*) FROM submissions WHERE is_submitted = TRUE) as submitted_count,
-        (SELECT COUNT(*) FROM submissions) as total_submissions
-    `);
+    const professorId = req.user.userId;
 
-    const counts = countsResult.rows[0];
+    const result = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(DISTINCT cs.student_id)
+         FROM course_students cs
+         JOIN courses c ON cs.course_id = c.id
+         WHERE c.professor_id = $1) AS total_students,
 
-    // Submission rate
-    const submissionRate = counts.total_submissions > 0 
-      ? ((counts.submitted_count / counts.total_submissions) * 100).toFixed(2)
+        (SELECT COUNT(*)
+         FROM courses
+         WHERE professor_id = $1) AS total_courses,
+
+        (SELECT COUNT(*)
+         FROM assignments
+         WHERE created_by = $1) AS total_assignments,
+
+        (SELECT COUNT(*)
+         FROM assignments
+         WHERE created_by = $1
+           AND due_date >= CURRENT_TIMESTAMP) AS active_assignments,
+
+        (SELECT COUNT(*)
+         FROM assignments
+         WHERE created_by = $1
+           AND due_date < CURRENT_TIMESTAMP) AS completed_deadlines,
+
+        (SELECT COUNT(*)
+         FROM submissions s
+         JOIN assignments a ON s.assignment_id = a.id
+         WHERE a.created_by = $1
+           AND s.is_submitted = TRUE) AS submitted_count,
+
+        (SELECT COUNT(*)
+         FROM submissions s
+         JOIN assignments a ON s.assignment_id = a.id
+         WHERE a.created_by = $1
+           AND s.acknowledged = TRUE) AS acknowledged_count,
+
+        (SELECT COUNT(*)
+         FROM groups g
+         WHERE EXISTS (
+           SELECT 1
+           FROM group_members gm
+           WHERE gm.group_id = g.id
+         )) AS total_groups
+      `,
+      [professorId]
+    );
+
+    const row = result.rows[0];
+
+    const totalAssignments = Number(row.total_assignments);
+    const submittedCount = Number(row.submitted_count);
+    const acknowledgedCount = Number(row.acknowledged_count);
+
+    const submissionRate = totalAssignments > 0
+      ? Number(((submittedCount / totalAssignments) * 100).toFixed(2))
+      : 0;
+
+    const acknowledgmentRate = submittedCount > 0
+      ? Number(((acknowledgedCount / submittedCount) * 100).toFixed(2))
       : 0;
 
     res.status(200).json({
       overview: {
-        totalStudents: parseInt(counts.total_students),
-        totalAdmins: parseInt(counts.total_admins),
-        totalGroups: parseInt(counts.total_groups),
-        totalAssignments: parseInt(counts.total_assignments),
-        totalSubmissions: parseInt(counts.total_submissions),
-        submittedCount: parseInt(counts.submitted_count),
-        submissionRate: parseFloat(submissionRate),
+        totalStudents: Number(row.total_students),
+        totalCourses: Number(row.total_courses),
+        totalAssignments,
+        activeAssignments: Number(row.active_assignments),
+        completedDeadlines: Number(row.completed_deadlines),
+        totalGroups: Number(row.total_groups),
+        submittedCount,
+        acknowledgedCount,
+        submissionRate,
+        acknowledgmentRate,
       },
     });
   } catch (error) {
@@ -38,35 +88,125 @@ const getOverviewAnalytics = async (req, res) => {
   }
 };
 
-// Get analytics by group
+// Get course-wise analytics
+const getCourseAnalytics = async (req, res) => {
+  try {
+    const professorId = req.user.userId;
+
+    const result = await pool.query(
+      `
+      SELECT
+        c.id,
+        c.name,
+        c.description,
+        COUNT(DISTINCT cs.student_id) AS student_count,
+        COUNT(DISTINCT a.id) AS assignment_count,
+        COUNT(DISTINCT CASE
+          WHEN s.is_submitted = TRUE THEN s.id
+        END) AS submitted_count,
+        COUNT(DISTINCT CASE
+          WHEN s.acknowledged = TRUE THEN s.id
+        END) AS acknowledged_count
+      FROM courses c
+      LEFT JOIN course_students cs
+        ON c.id = cs.course_id
+      LEFT JOIN assignments a
+        ON c.id = a.course_id
+      LEFT JOIN submissions s
+        ON a.id = s.assignment_id
+      WHERE c.professor_id = $1
+      GROUP BY c.id, c.name, c.description
+      ORDER BY c.created_at DESC
+      `,
+      [professorId]
+    );
+
+    const courses = result.rows.map((row) => {
+      const assignments = Number(row.assignment_count);
+      const submitted = Number(row.submitted_count);
+
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        studentCount: Number(row.student_count),
+        assignmentCount: assignments,
+        submittedCount: submitted,
+        acknowledgedCount: Number(row.acknowledged_count),
+        submissionRate: assignments > 0
+          ? Number(((submitted / assignments) * 100).toFixed(2))
+          : 0,
+      };
+    });
+
+    res.status(200).json({ courses });
+  } catch (error) {
+    console.error('Get course analytics error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Get group-wise analytics
 const getGroupAnalytics = async (req, res) => {
   try {
-    const groupsResult = await pool.query(`
-      SELECT 
+    const professorId = req.user.userId;
+
+    const result = await pool.query(
+      `
+      SELECT
         g.id,
         g.name,
-        COUNT(DISTINCT gm.user_id) as member_count,
-        COUNT(DISTINCT s.assignment_id) as total_assignment_submissions,
-        COUNT(DISTINCT CASE WHEN s.is_submitted = TRUE THEN s.assignment_id END) as submitted_assignments,
-        ROUND(
-          COUNT(DISTINCT CASE WHEN s.is_submitted = TRUE THEN s.assignment_id END)::NUMERIC / 
-          NULLIF(COUNT(DISTINCT s.assignment_id)::NUMERIC, 0) * 100, 2
-        ) as submission_rate
+        g.leader_id,
+        COUNT(DISTINCT gm.user_id) AS member_count,
+        COUNT(DISTINCT a.id) AS assignment_count,
+        COUNT(DISTINCT CASE
+          WHEN s.is_submitted = TRUE THEN s.assignment_id
+        END) AS submitted_assignments,
+        COUNT(DISTINCT CASE
+          WHEN s.acknowledged = TRUE THEN s.assignment_id
+        END) AS acknowledged_assignments
       FROM groups g
-      LEFT JOIN group_members gm ON g.id = gm.group_id
-      LEFT JOIN submissions s ON g.id = s.group_id
-      GROUP BY g.id, g.name
-      ORDER BY submission_rate DESC NULLS LAST
-    `);
+      LEFT JOIN group_members gm
+        ON g.id = gm.group_id
+      LEFT JOIN assignment_groups ag
+        ON g.id = ag.group_id
+      LEFT JOIN assignments a
+        ON ag.assignment_id = a.id
+        AND a.created_by = $1
+      LEFT JOIN submissions s
+        ON a.id = s.assignment_id
+        AND g.id = s.group_id
+      WHERE EXISTS (
+        SELECT 1
+        FROM assignment_groups ag2
+        JOIN assignments a2
+          ON ag2.assignment_id = a2.id
+        WHERE ag2.group_id = g.id
+          AND a2.created_by = $1
+      )
+      GROUP BY g.id, g.name, g.leader_id
+      ORDER BY g.name ASC
+      `,
+      [professorId]
+    );
 
-    const groups = groupsResult.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      memberCount: parseInt(row.member_count),
-      totalAssignmentSubmissions: parseInt(row.total_assignment_submissions),
-      submittedAssignments: parseInt(row.submitted_assignments),
-      submissionRate: row.submission_rate ? parseFloat(row.submission_rate) : 0,
-    }));
+    const groups = result.rows.map((row) => {
+      const assignmentCount = Number(row.assignment_count);
+      const submitted = Number(row.submitted_assignments);
+
+      return {
+        id: row.id,
+        name: row.name,
+        leaderId: row.leader_id,
+        memberCount: Number(row.member_count),
+        assignmentCount,
+        submittedAssignments: submitted,
+        acknowledgedAssignments: Number(row.acknowledged_assignments),
+        submissionRate: assignmentCount > 0
+          ? Number(((submitted / assignmentCount) * 100).toFixed(2))
+          : 0,
+      };
+    });
 
     res.status(200).json({ groups });
   } catch (error) {
@@ -75,38 +215,59 @@ const getGroupAnalytics = async (req, res) => {
   }
 };
 
-// Get analytics by student
+// Get student-wise analytics
 const getStudentAnalytics = async (req, res) => {
   try {
-    const studentsResult = await pool.query(`
-      SELECT 
+    const professorId = req.user.userId;
+
+    const result = await pool.query(
+      `
+      SELECT
         u.id,
         u.email,
         u.first_name,
         u.last_name,
-        COUNT(DISTINCT g.id) as group_count,
-        COUNT(DISTINCT s.assignment_id) as submitted_assignments,
-        ROUND(
-          COUNT(DISTINCT s.assignment_id)::NUMERIC / 
-          NULLIF((SELECT COUNT(*) FROM assignments)::NUMERIC, 0) * 100, 2
-        ) as submission_rate
+        COUNT(DISTINCT cs.course_id) AS course_count,
+        COUNT(DISTINCT CASE
+          WHEN s.is_submitted = TRUE THEN s.assignment_id
+        END) AS submitted_assignments,
+        COUNT(DISTINCT CASE
+          WHEN s.acknowledged = TRUE THEN s.assignment_id
+        END) AS acknowledged_assignments
       FROM users u
-      LEFT JOIN group_members gm ON u.id = gm.user_id
-      LEFT JOIN groups g ON gm.group_id = g.id
-      LEFT JOIN submissions s ON u.id = s.submitted_by AND s.is_submitted = TRUE
+      JOIN course_students cs
+        ON u.id = cs.student_id
+      JOIN courses c
+        ON cs.course_id = c.id
+        AND c.professor_id = $1
+      LEFT JOIN assignments a
+        ON a.course_id = c.id
+      LEFT JOIN submissions s
+        ON s.assignment_id = a.id
+        AND (
+          s.student_id = u.id
+          OR EXISTS (
+            SELECT 1
+            FROM group_members gm
+            WHERE gm.group_id = s.group_id
+              AND gm.user_id = u.id
+          )
+        )
       WHERE u.role = 'student'
       GROUP BY u.id, u.email, u.first_name, u.last_name
       ORDER BY submitted_assignments DESC
-    `);
+      `,
+      [professorId]
+    );
 
-    const students = studentsResult.rows.map(row => ({
+    const students = result.rows.map((row) => ({
       id: row.id,
       email: row.email,
       firstName: row.first_name,
       lastName: row.last_name,
-      groupCount: parseInt(row.group_count),
-      submittedAssignments: parseInt(row.submitted_assignments),
-      submissionRate: row.submission_rate ? parseFloat(row.submission_rate) : 0,
+      courseCount: Number(row.course_count),
+      submittedAssignments: Number(row.submitted_assignments),
+      acknowledgedAssignments: Number(row.acknowledged_assignments),
     }));
 
     res.status(200).json({ students });
@@ -119,31 +280,65 @@ const getStudentAnalytics = async (req, res) => {
 // Get assignment submission statistics
 const getAssignmentStats = async (req, res) => {
   try {
-    const assignmentsResult = await pool.query(`
-      SELECT 
+    const professorId = req.user.userId;
+
+    const result = await pool.query(
+      `
+      SELECT
         a.id,
         a.title,
         a.due_date,
-        COUNT(DISTINCT s.group_id) as total_groups_assigned,
-        COUNT(DISTINCT CASE WHEN s.is_submitted = TRUE THEN s.group_id END) as groups_submitted,
-        ROUND(
-          COUNT(DISTINCT CASE WHEN s.is_submitted = TRUE THEN s.group_id END)::NUMERIC / 
-          NULLIF(COUNT(DISTINCT s.group_id)::NUMERIC, 0) * 100, 2
-        ) as submission_rate,
-        MAX(CASE WHEN s.submitted_at IS NOT NULL THEN s.submitted_at END) as last_submission
-      FROM assignments a
-      LEFT JOIN submissions s ON a.id = s.assignment_id
-      GROUP BY a.id, a.title, a.due_date
-      ORDER BY a.due_date DESC
-    `);
+        a.submission_type,
+        a.course_id,
+        c.name AS course_name,
 
-    const assignments = assignmentsResult.rows.map(row => ({
+        COUNT(DISTINCT CASE
+          WHEN a.submission_type = 'group'
+          THEN ag.group_id
+        END) AS total_groups_assigned,
+
+        COUNT(DISTINCT CASE
+          WHEN s.is_submitted = TRUE
+          THEN s.id
+        END) AS submitted_count,
+
+        COUNT(DISTINCT CASE
+          WHEN s.acknowledged = TRUE
+          THEN s.id
+        END) AS acknowledged_count,
+
+        MAX(s.submitted_at) AS last_submission
+
+      FROM assignments a
+      LEFT JOIN courses c
+        ON a.course_id = c.id
+      LEFT JOIN assignment_groups ag
+        ON a.id = ag.assignment_id
+      LEFT JOIN submissions s
+        ON a.id = s.assignment_id
+      WHERE a.created_by = $1
+      GROUP BY
+        a.id,
+        a.title,
+        a.due_date,
+        a.submission_type,
+        a.course_id,
+        c.name
+      ORDER BY a.due_date ASC
+      `,
+      [professorId]
+    );
+
+    const assignments = result.rows.map((row) => ({
       id: row.id,
       title: row.title,
       dueDate: row.due_date,
-      totalGroupsAssigned: parseInt(row.total_groups_assigned),
-      groupsSubmitted: parseInt(row.groups_submitted),
-      submissionRate: row.submission_rate ? parseFloat(row.submission_rate) : 0,
+      submissionType: row.submission_type,
+      courseId: row.course_id,
+      courseName: row.course_name,
+      totalGroupsAssigned: Number(row.total_groups_assigned),
+      submittedCount: Number(row.submitted_count),
+      acknowledgedCount: Number(row.acknowledged_count),
       lastSubmission: row.last_submission,
     }));
 
@@ -154,88 +349,143 @@ const getAssignmentStats = async (req, res) => {
   }
 };
 
-// Get detailed submission status for a specific assignment
+// Get detailed stats for a specific assignment
 const getAssignmentDetailedStats = async (req, res) => {
   try {
     const { assignmentId } = req.params;
+    const professorId = req.user.userId;
 
-    // Verify assignment exists
     const assignmentResult = await pool.query(
-      'SELECT * FROM assignments WHERE id = $1',
-      [assignmentId]
+      `
+      SELECT
+        a.id,
+        a.title,
+        a.description,
+        a.due_date,
+        a.submission_type,
+        a.course_id,
+        c.name AS course_name
+      FROM assignments a
+      LEFT JOIN courses c
+        ON a.course_id = c.id
+      WHERE a.id = $1
+        AND a.created_by = $2
+      `,
+      [assignmentId, professorId]
     );
 
     if (assignmentResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Assignment not found' });
-    }
-
-    // Get detailed stats
-    const statsResult = await pool.query(`
-      SELECT 
-        a.title,
-        a.due_date,
-        COUNT(DISTINCT g.id) as total_groups,
-        COUNT(DISTINCT CASE WHEN s.is_submitted = TRUE THEN g.id END) as submitted_groups,
-        COUNT(DISTINCT CASE WHEN s.is_submitted = FALSE OR s.is_submitted IS NULL THEN g.id END) as pending_groups
-      FROM assignments a
-      CROSS JOIN groups g
-      LEFT JOIN submissions s ON a.id = s.assignment_id AND g.id = s.group_id
-      WHERE a.id = $1
-      GROUP BY a.id, a.title, a.due_date
-    `, [assignmentId]);
-
-    if (statsResult.rows.length === 0) {
-      return res.status(200).json({
-        stats: {
-          title: assignmentResult.rows[0].title,
-          dueDate: assignmentResult.rows[0].due_date,
-          totalGroups: 0,
-          submittedGroups: 0,
-          pendingGroups: 0,
-        },
-        groupDetails: [],
+      return res.status(404).json({
+        error: 'Assignment not found',
       });
     }
 
+    const assignment = assignmentResult.rows[0];
+
+    const statsResult = await pool.query(
+      `
+      SELECT
+        COUNT(*) AS total_records,
+
+        COUNT(CASE
+          WHEN s.is_submitted = TRUE THEN 1
+        END) AS submitted_count,
+
+        COUNT(CASE
+          WHEN s.acknowledged = TRUE THEN 1
+        END) AS acknowledged_count
+
+      FROM submissions s
+      WHERE s.assignment_id = $1
+      `,
+      [assignmentId]
+    );
+
     const stats = statsResult.rows[0];
 
-    // Get group-wise submission details
-    const groupDetailsResult = await pool.query(`
-      SELECT 
-        g.id,
-        g.name,
-        COUNT(DISTINCT gm.user_id) as member_count,
-        CASE WHEN s.is_submitted = TRUE THEN 'Submitted' ELSE 'Pending' END as status,
-        s.submitted_at,
-        u.first_name, u.last_name
-      FROM groups g
-      LEFT JOIN group_members gm ON g.id = gm.group_id
-      LEFT JOIN submissions s ON g.id = s.group_id AND s.assignment_id = $1
-      LEFT JOIN users u ON s.submitted_by = u.id
-      GROUP BY g.id, g.name, s.is_submitted, s.submitted_at, u.id, u.first_name, u.last_name
-    `, [assignmentId]);
+    const totalRecords = Number(stats.total_records);
+    const submittedCount = Number(stats.submitted_count);
+    const acknowledgedCount = Number(stats.acknowledged_count);
 
-    const groupDetails = groupDetailsResult.rows.map(row => ({
-      groupId: row.id,
-      groupName: row.name,
-      memberCount: parseInt(row.member_count),
-      status: row.status,
+    const submissionRate = totalRecords > 0
+      ? Number(((submittedCount / totalRecords) * 100).toFixed(2))
+      : 0;
+
+    const acknowledgmentRate = submittedCount > 0
+      ? Number(((acknowledgedCount / submittedCount) * 100).toFixed(2))
+      : 0;
+
+    const detailsResult = await pool.query(
+      `
+      SELECT
+        s.id,
+        s.group_id,
+        s.student_id,
+        s.is_submitted,
+        s.submitted_by,
+        s.submitted_at,
+        s.acknowledged,
+        s.acknowledged_by,
+        s.acknowledged_at,
+
+        g.name AS group_name,
+        g.leader_id,
+
+        u.first_name,
+        u.last_name,
+        u.email
+
+      FROM submissions s
+
+      LEFT JOIN groups g
+        ON s.group_id = g.id
+
+      LEFT JOIN users u
+        ON s.submitted_by = u.id
+
+      WHERE s.assignment_id = $1
+      ORDER BY s.submitted_at DESC NULLS LAST
+      `,
+      [assignmentId]
+    );
+
+    const details = detailsResult.rows.map((row) => ({
+      id: row.id,
+      groupId: row.group_id,
+      groupName: row.group_name,
+      groupLeaderId: row.leader_id,
+      studentId: row.student_id,
+      isSubmitted: row.is_submitted,
+      submittedBy: row.submitted_by,
+      submittedByName: row.submitted_by
+        ? `${row.first_name || ''} ${row.last_name || ''}`.trim()
+        : null,
+      submittedByEmail: row.email,
       submittedAt: row.submitted_at,
-      submittedBy: row.submitted_at ? `${row.first_name} ${row.last_name}` : null,
+      acknowledged: row.acknowledged,
+      acknowledgedBy: row.acknowledged_by,
+      acknowledgedAt: row.acknowledged_at,
     }));
 
     res.status(200).json({
-      stats: {
-        title: stats.title,
-        dueDate: stats.due_date,
-        totalGroups: parseInt(stats.total_groups),
-        submittedGroups: parseInt(stats.submitted_groups),
-        pendingGroups: parseInt(stats.pending_groups),
-        submissionRate: stats.total_groups > 0 
-          ? ((parseInt(stats.submitted_groups) / parseInt(stats.total_groups)) * 100).toFixed(2)
-          : 0,
+      assignment: {
+        id: assignment.id,
+        title: assignment.title,
+        description: assignment.description,
+        dueDate: assignment.due_date,
+        submissionType: assignment.submission_type,
+        courseId: assignment.course_id,
+        courseName: assignment.course_name,
       },
-      groupDetails,
+      stats: {
+        totalRecords,
+        submittedCount,
+        pendingCount: Math.max(totalRecords - submittedCount, 0),
+        acknowledgedCount,
+        submissionRate,
+        acknowledgmentRate,
+      },
+      details,
     });
   } catch (error) {
     console.error('Get assignment detailed stats error:', error);
@@ -245,6 +495,7 @@ const getAssignmentDetailedStats = async (req, res) => {
 
 module.exports = {
   getOverviewAnalytics,
+  getCourseAnalytics,
   getGroupAnalytics,
   getStudentAnalytics,
   getAssignmentStats,

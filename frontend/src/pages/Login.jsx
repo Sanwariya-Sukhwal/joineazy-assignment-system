@@ -9,22 +9,57 @@ export default function Login() {
   });
 
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  const update = (key) => (e) => {
+    setForm((prev) => ({
+      ...prev,
+      [key]: e.target.value,
+    }));
+
+    if (error) {
+      setError('');
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
 
+    const email = form.email.trim();
+
+    if (!email || !form.password) {
+      setError('Please enter your email and password.');
+      return;
+    }
+
+    if (form.password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+
     try {
-      await login(form);
+      setLoading(true);
+
+      await login({
+        email,
+        password: form.password,
+      });
+
+      // AuthContext handles the JWT/user state.
+      // Both student and professor/admin accounts use the same login.
       navigate('/dashboard');
     } catch (err) {
       setError(
         err.response?.data?.error ||
-        'Unable to sign in.'
+        'Unable to sign in. Please check your credentials.'
       );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -105,7 +140,10 @@ export default function Login() {
 
           {/* Error */}
           {error && (
-            <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+            <div
+              role="alert"
+              className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600"
+            >
               {error}
             </div>
           )}
@@ -129,15 +167,12 @@ export default function Login() {
                 id="login-email"
                 type="email"
                 value={form.email}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    email: e.target.value,
-                  })
-                }
+                onChange={update('email')}
                 required
+                autoComplete="email"
                 placeholder="Enter your email"
-                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
+                disabled={loading}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </div>
 
@@ -150,28 +185,44 @@ export default function Login() {
                 Password
               </label>
 
-              <input
-                id="login-password"
-                type="password"
-                value={form.password}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    password: e.target.value,
-                  })
-                }
-                required
-                placeholder="Enter your password"
-                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
-              />
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={form.password}
+                  onChange={update('password')}
+                  required
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  disabled={loading}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  disabled={loading}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-[#216452] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
             {/* Sign In */}
             <button
               type="submit"
-              className="w-full rounded-lg bg-[#216452] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#194f40] focus:outline-none focus:ring-2 focus:ring-[#216452]/30 focus:ring-offset-2"
+              disabled={loading}
+              className="flex w-full items-center justify-center rounded-lg bg-[#216452] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#194f40] focus:outline-none focus:ring-2 focus:ring-[#216452]/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              Sign in
+              {loading ? (
+                <>
+                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Signing in...
+                </>
+              ) : (
+                'Sign in'
+              )}
             </button>
           </form>
 

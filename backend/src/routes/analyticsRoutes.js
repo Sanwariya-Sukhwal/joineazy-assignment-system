@@ -1,15 +1,22 @@
 const express = require('express');
+
 const router = express.Router();
+
 const analyticsController = require('../controllers/analyticsController');
+
 const authMiddleware = require('../middleware/authMiddleware');
+
 const roleMiddleware = require('../middleware/roleMiddleware');
 
-// All analytics routes require authentication and admin role
+// All analytics routes require authentication and admin/professor role
 router.use(authMiddleware);
 router.use(roleMiddleware(['admin']));
 
 // Get overall analytics overview
 router.get('/overview', analyticsController.getOverviewAnalytics);
+
+// Get course-wise analytics
+router.get('/courses', analyticsController.getCourseAnalytics);
 
 // Get group-wise analytics
 router.get('/groups', analyticsController.getGroupAnalytics);

@@ -8,32 +8,69 @@ export default function Register() {
     lastName: '',
     email: '',
     password: '',
+    confirmPassword: '',
   });
 
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const { register } = useAuth();
   const navigate = useNavigate();
 
   const update = (key) => (e) => {
-    setForm({
-      ...form,
+    setForm((prev) => ({
+      ...prev,
       [key]: e.target.value,
-    });
+    }));
+
+    if (error) {
+      setError('');
+    }
   };
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
 
+    const firstName = form.firstName.trim();
+    const lastName = form.lastName.trim();
+    const email = form.email.trim();
+
+    if (!firstName || !lastName || !email || !form.password) {
+      setError('Please fill in all required fields.');
+      return;
+    }
+
+    if (form.password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+
+    if (form.password !== form.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
     try {
-      await register(form);
+      setLoading(true);
+
+      await register({
+        firstName,
+        lastName,
+        email,
+        password: form.password,
+      });
+
       navigate('/dashboard');
     } catch (err) {
       setError(
         err.response?.data?.error ||
-        'Unable to create account.'
+        'Unable to create account. Please try again.'
       );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -116,7 +153,10 @@ export default function Register() {
 
           {/* Error */}
           {error && (
-            <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+            <div
+              role="alert"
+              className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600"
+            >
               {error}
             </div>
           )}
@@ -141,11 +181,14 @@ export default function Register() {
 
                 <input
                   id="first-name"
+                  type="text"
                   value={form.firstName}
                   onChange={update('firstName')}
                   required
+                  autoComplete="given-name"
                   placeholder="First name"
-                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
+                  disabled={loading}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
                 />
               </div>
 
@@ -160,11 +203,14 @@ export default function Register() {
 
                 <input
                   id="last-name"
+                  type="text"
                   value={form.lastName}
                   onChange={update('lastName')}
                   required
+                  autoComplete="family-name"
                   placeholder="Last name"
-                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
+                  disabled={loading}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
                 />
               </div>
             </div>
@@ -184,8 +230,10 @@ export default function Register() {
                 value={form.email}
                 onChange={update('email')}
                 required
+                autoComplete="email"
                 placeholder="Enter your email"
-                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
+                disabled={loading}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </div>
 
@@ -198,24 +246,102 @@ export default function Register() {
                 Password
               </label>
 
-              <input
-                id="register-password"
-                type="password"
-                minLength={6}
-                value={form.password}
-                onChange={update('password')}
-                required
-                placeholder="Minimum 6 characters"
-                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15"
-              />
+              <div className="relative">
+                <input
+                  id="register-password"
+                  type={showPassword ? 'text' : 'password'}
+                  minLength={6}
+                  value={form.password}
+                  onChange={update('password')}
+                  required
+                  autoComplete="new-password"
+                  placeholder="Minimum 6 characters"
+                  disabled={loading}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#216452] focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  disabled={loading}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-[#216452] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+
+            {/* Confirm Password */}
+            <div>
+              <label
+                htmlFor="confirm-password"
+                className="mb-2 block text-sm font-semibold text-slate-700"
+              >
+                Confirm password
+              </label>
+
+              <div className="relative">
+                <input
+                  id="confirm-password"
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  value={form.confirmPassword}
+                  onChange={update('confirmPassword')}
+                  required
+                  autoComplete="new-password"
+                  placeholder="Re-enter your password"
+                  disabled={loading}
+                  className={`w-full rounded-lg border bg-white px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:ring-2 focus:ring-[#216452]/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                    form.confirmPassword &&
+                    form.password !== form.confirmPassword
+                      ? 'border-red-300 focus:border-red-400'
+                      : 'border-slate-300 focus:border-[#216452]'
+                  }`}
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowConfirmPassword((prev) => !prev)
+                  }
+                  disabled={loading}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-[#216452] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {showConfirmPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+
+              {/* Password mismatch */}
+              {form.confirmPassword &&
+                form.password !== form.confirmPassword && (
+                  <p className="mt-2 text-xs font-medium text-red-500">
+                    Passwords do not match.
+                  </p>
+                )}
+
+              {/* Password matched */}
+              {form.confirmPassword &&
+                form.password === form.confirmPassword &&
+                form.password.length >= 6 && (
+                  <p className="mt-2 text-xs font-medium text-[#216452]">
+                    Passwords match.
+                  </p>
+                )}
             </div>
 
             {/* Create Account */}
             <button
               type="submit"
-              className="w-full rounded-lg bg-[#216452] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#194f40] focus:outline-none focus:ring-2 focus:ring-[#216452]/30 focus:ring-offset-2"
+              disabled={loading}
+              className="flex w-full items-center justify-center rounded-lg bg-[#216452] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#194f40] focus:outline-none focus:ring-2 focus:ring-[#216452]/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              Create account
+              {loading ? (
+                <>
+                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Creating account...
+                </>
+              ) : (
+                'Create account'
+              )}
             </button>
           </form>
 

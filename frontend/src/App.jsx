@@ -19,6 +19,8 @@ import Groups from './pages/admin/Groups';
 import Analytics from './pages/admin/Analytics';
 
 import ProtectedRoute from './routes/ProtectedRoute';
+import Courses from './pages/admin/Courses';
+import AdminAssignmentDetails from './pages/admin/AdminAssignmentDetails';
 
 function RoleRoute({ role, children }) {
   const { user } = useAuth();
@@ -40,11 +42,13 @@ function AppLayout() {
         <Sidebar />
         <main className="w-full max-w-7xl px-5 py-9 sm:px-8 lg:px-12">
           <Routes>
-            <Route path="/dashboard" element={user?.role === 'admin' ? <AdminDashboard /> : <StudentDashboard />} />
+            <Route path="/dashboard" element={ user?.role === 'admin'  ? <AdminDashboard />  : <StudentDashboard />}/>
+            <Route path="/admin/courses" element={<RoleRoute role="admin"><Courses /></RoleRoute>} />
             <Route path="/student/assignments" element={<RoleRoute role="student"><StudentAssignments /></RoleRoute>} />
             <Route path="/student/group" element={<RoleRoute role="student"><MyGroup /></RoleRoute>} />
             <Route path="/admin/assignments" element={<RoleRoute role="admin"><AdminAssignments /></RoleRoute>} />
             <Route path="/admin/assignments/new" element={<RoleRoute role="admin"><CreateAssignment /></RoleRoute>} />
+            <Route path="/admin/assignments/:id" element={ <RoleRoute role="admin">  <AdminAssignmentDetails /> </RoleRoute>}/>
             <Route path="/admin/assignments/:id/edit" element={<RoleRoute role="admin"><EditAssignment /></RoleRoute>} />
             <Route path="/admin/groups" element={<RoleRoute role="admin"><Groups /></RoleRoute>} />
             <Route path="/admin/analytics" element={<RoleRoute role="admin"><Analytics /></RoleRoute>} />
